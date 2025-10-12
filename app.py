@@ -28,6 +28,9 @@ except Exception as e:
 app = Flask(__name__)
 CORS(app)
 
+# 긴 텍스트 요청을 위한 설정
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB로 증가 (기본 1MB)
+
 # --- 번역 함수 분리 (모델 이름과 대상 언어를 파라미터로 받도록 수정) ---
 def translate_with_gemini(text, model_name, target_language):
     api_keys = config.get('gemini', {}).get('api_keys', [])

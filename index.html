@@ -209,17 +209,30 @@
             inputTextarea.disabled = true;
             outputDiv.textContent = '번역 중... (시간이 다소 소요될 수 있습니다)'; // 로딩 표시
 
-            // 로컬 백엔드 서버에 번역 요청
+            // 로컬 백엔드 서버에 번역 요청 (긴 텍스트 지원을 위해 AbortController 사용)
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 300000); // 5분 timeout
+
             fetch('http://localhost:5000/translate', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ 
+                body: JSON.stringify({
                     text: inputText,
                     model: selectedModel, // 선택된 정확한 모델 이름을 전송
                     target_language: targetLanguage // 선택된 대상 언어 전송
-                })
+                }),
+                signal: controller.signal
+            })
+            .then(response => {
+                clearTimeout(timeoutId);
+                if (!response.ok) {
+                    return response.json().then(err => {
+                        throw new Error(err.error || '서버에서 오류가 발생했습니다.');
+                    });
+                }
+                return response.json();
             })
             .then(response => {
                 if (!response.ok) {

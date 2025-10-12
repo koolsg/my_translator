@@ -113,10 +113,10 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Project specific
-config.json    # 민감한 API 키 포함 파일
-gemini.md      # 임시 문서 파일
-
 # Never commit sensitive files
 secrets.json
 keys.json
+
+# Project specific
+config.json
+gemini.md
