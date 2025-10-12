@@ -1,0 +1,39 @@
+{
+  "#config.json.example": "이 파일은 config.json 설정의 예시입니다. 실제 사용할 때는 파일명을 config.json으로 변경하고 실제 API 키를 입력하세요.",
+
+  "gemini": {
+    "#api_keys": "Google Gemini API를 사용하기 위한 API 키들 (배열 형식으로 여러 키 지원 가능)",
+    "api_keys": [
+      "your_gemini_api_key_here"
+    ],
+    "#available_models": "사용 가능한 Gemini 모델 목록 (자동으로 업데이트되므로 수정 불필요)",
+    "available_models": [
+      "models/gemini-1.5-flash",
+      "models/gemini-pro",
+      "models/gemini-1.5-pro"
+    ]
+  },
+
+  "openai": {
+    "#api_key": "OpenAI API 키 (단일 키)",
+    "api_key": "your_openai_api_key_here",
+    "#available_models": "사용 가능한 OpenAI 모델 목록 (자동으로 업데이트되므로 수정 불필요)",
+    "available_models": [
+      "gpt-3.5-turbo",
+      "gpt-4",
+      "gpt-4-turbo-preview"
+    ]
+  },
+
+  "presets": {
+    "#models": "번역에서 성공한 모델들이 자동으로 저장되는 프리셋 (수동 수정 가능)",
+    "models": [],
+    "#targets": "자주 사용하는 대상 언어 목록",
+    "targets": [
+      "ko", // 한국어
+      "en", // 영어
+      "ja", // 일본어
+      "zh"  // 중국어
+    ]
+  }
+}
