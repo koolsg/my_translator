@@ -37,7 +37,7 @@ First, you need to provide your API keys.
 
 1. **Copy the example configuration**:
    ```bash
-   cp config.json.example config.json
+   cp config.json.example config.
    ```
 
 2. **Edit `config.json`** with your actual API keys:

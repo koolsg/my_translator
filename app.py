@@ -1,177 +1,347 @@
-import os
+"""
+Translation API Server
+
+A Flask-based API server for text translation using OpenAI GPT and Google Gemini models.
+"""
+
 import json
+import logging
 import random
-import google.generativeai as genai
-import openai
+import sys
+from typing import Dict, List, Optional, Any, cast
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from openai import OpenAI
+import google.generativeai as genai
 
-# --- config.json 파일에서 설정 불러오기 ---
-try:
-    with open('config.json', 'r') as f:
-        config_text = f.read()
-        # 주석(# 이후부터 떨어내기) 처리
-        lines = []
-        for line in config_text.split('\n'):
-            if '#' in line:
-                line = line[:line.find('#')].rstrip()
-            if line.strip():  # 빈 줄 건너뛰기
-                lines.append(line)
-        config_text_cleaned = '\n'.join(lines)
-        config = json.loads(config_text_cleaned)
-    print("config.json 파일을 성공적으로 불러왔습니다.")
-except Exception as e:
-    print(f"치명적 오류: config.json 파일을 읽을 수 없거나 형식이 잘못되었습니다. 프로그램을 종료합니다.")
-    print(f"오류 내용: {e}")
-    exit()
+# Constants
+DEFAULT_HOST = '127.0.0.1'
+DEFAULT_PORT = 5000
+MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
+DEFAULT_PROVIDER = 'gemini'
+MAX_PRESETS = 5
 
-app = Flask(__name__)
-CORS(app)
+# Logging configuration
+def setup_logging(debug: bool = False) -> None:
+    """Configure logging for the application."""
+    log_level = logging.DEBUG if debug else logging.INFO
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
-# 긴 텍스트 요청을 위한 설정
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB로 증가 (기본 1MB)
-
-# --- 번역 함수 분리 (모델 이름과 대상 언어를 파라미터로 받도록 수정) ---
-def translate_with_gemini(text, model_name, target_language):
-    api_keys = config.get('gemini', {}).get('api_keys', [])
-    if not api_keys or not all(api_keys):
-        raise ValueError("Gemini API 키가 config.json에 설정되지 않았습니다.")
-    
-    selected_key = random.choice(api_keys)
-    genai.configure(api_key=selected_key)
-    
-    model = genai.GenerativeModel(model_name)
-    prompt = f"Translate the following text to {target_language}: \n\n{text}"
-    response = model.generate_content(prompt)
-    return response.text
-
-def translate_with_openai(text, model_name, target_language):
-    openai_config = config.get('openai', {})
-    api_key = openai_config.get('api_key')
-
-    if not api_key:
-        raise ValueError("OpenAI API 키가 config.json에 설정되지 않았습니다.")
-
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key)
-
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": f"You are a translator. Translate the given text to {target_language}."},
-            {"role": "user", "content": text}
+    # Configure root logger
+    logging.basicConfig(
+        level=log_level,
+        format=log_format,
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler('translation_server.log', encoding='utf-8')
         ]
     )
-    return response.choices[0].message.content
 
-# --- API 라우트 ---
+    # Set specific log levels for noisy libraries
+    logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    logging.getLogger('flask').setLevel(logging.WARNING)
 
-@app.route('/models', methods=['GET'])
-def get_models():
-    """선택된 Provider의 사용 가능한 모델 목록을 반환하는 엔드포인트 - 프리셋 모델 우선 표시"""
-    provider = request.args.get('provider', 'gemini')  # 기본값은 gemini
-    available_models = []
+    logger = logging.getLogger(__name__)
+    logger.info("Logging configured successfully")
 
-    # 프리셋 모델들 중 해당 provider의 것만 먼저 추가
-    presets = config.get('presets', {}).get('models', [])
-    provider_presets = [model for model in presets if ('gemini' in model and provider == 'gemini') or ('gpt' in model and provider == 'openai')]
-    available_models.extend(provider_presets)
 
-    if provider == 'gemini':
-        # Gemini 모델 목록 가져오기
+class ConfigManager:
+    """Configuration file manager with JSON parsing and validation."""
+
+    def __init__(self, config_path: str = 'config.json') -> None:
+        self.config_path = config_path
+        self._config: Optional[Dict[str, Any]] = None
+        self.logger = logging.getLogger(__name__)
+
+    def load(self) -> Dict[str, Any]:
+        """Load and parse configuration file."""
         try:
-            gemini_api_keys = config.get('gemini', {}).get('api_keys', [])
-            if gemini_api_keys and all(gemini_api_keys):
-                genai.configure(api_key=random.choice(gemini_api_keys))
-                for m in genai.list_models():
-                    if 'generateContent' in m.supported_generation_methods:
-                        model_name = m.name
-                        if model_name not in available_models:  # 프리셋에 없는 경우만 추가
-                            available_models.append(model_name)
-            else:
-                # API key가 없는 경우 저장된 모델 목록 사용
-                saved_models = config.get('gemini', {}).get('available_models', [])
-                available_models.extend([model for model in saved_models if model not in available_models])
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                config_text = f.read()
+
+            # Remove comments (# and after)
+            lines = []
+            for line in config_text.split('\n'):
+                if '#' in line:
+                    line = line[:line.find('#')].rstrip()
+                if line.strip():
+                    lines.append(line)
+
+            config_text_cleaned = '\n'.join(lines)
+            config = json.loads(config_text_cleaned)
+
+            # Ensure config is a dictionary
+            if not isinstance(config, dict):
+                raise ValueError("Configuration must be a JSON object (dictionary)")
+
+            self._config = cast(Dict[str, Any], config)
+            self.logger.info("Configuration loaded successfully.")
+            return self._config
+
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Configuration file not found: {self.config_path}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in configuration file: {e}")
         except Exception as e:
-            print(f"Gemini 모델 목록을 가져오는 중 오류 발생: {e}")
-            # 저장된 모델 목록으로 fallback
-            saved_models = config.get('gemini', {}).get('available_models', [])
-            available_models.extend([model for model in saved_models if model not in available_models])
+            raise RuntimeError(f"Failed to load configuration: {e}")
 
-    elif provider == 'openai':
-        # OpenAI 모델 목록 가져오기
-        try:
-            openai_config = config.get('openai', {})
-            if openai_config.get('api_key') and openai_config.get('api_key') != 'YOUR_OPENAI_API_KEY_HERE':
-                import openai
-                openai.api_key = openai_config.get('api_key')
-                account_info = openai.models.list()
-                for model in account_info.data:
-                    model_name = model.id
-                    if model_name not in available_models:  # 프리셋에 없는 경우만 추가
-                        available_models.append(model_name)
-            else:
-                # API key가 없거나 기본값인 경우 저장된 모델 목록 사용
-                saved_models = config.get('openai', {}).get('available_models', [])
-                available_models.extend([model for model in saved_models if model not in available_models])
-        except Exception as e:
-            print(f"OpenAI 모델 목록을 가져오는 중 오류 발생: {e}")
-            # 저장된 모델 목록으로 fallback
-            saved_models = config.get('openai', {}).get('available_models', [])
-            available_models.extend([model for model in saved_models if model not in available_models])
+    def get_config(self) -> Dict[str, Any]:
+        """Get cached configuration."""
+        if self._config is None:
+            self._config = self.load()
+        return self._config
 
-    return jsonify(available_models)
+    def save_config(self, config: Dict[str, Any]) -> None:
+        """Save configuration to file."""
+        with open(self.config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
 
-@app.route('/translate', methods=['POST'])
-def translate_text_route():
-    data = request.get_json()
-    input_text = data.get('text')
-    model_choice = data.get('model') # 프론트엔드에서 정확한 모델 이름을 전달
-    target_language = data.get('target_language') # 프론트엔드에서 대상 언어를 전달
 
-    if not input_text:
-        return jsonify({"error": "No text provided"}), 400
-    if not model_choice:
-        return jsonify({"error": "No model selected"}), 400
-    if not target_language:
-        return jsonify({"error": "No target language selected"}), 400
+class GeminiTranslator:
+    """Translation service using Google Gemini API."""
 
-    try:
-        translated_text = ""
-        print(f"{model_choice} 모델로 {target_language}로 번역을 요청합니다...")
+    def __init__(self, config_manager: ConfigManager) -> None:
+        self.config_manager = config_manager
 
-        # 모델 이름에 따라 적절한 함수 호출
-        if 'gemini' in model_choice:
-            translated_text = translate_with_gemini(input_text, model_choice, target_language)
-        elif 'gpt' in model_choice:
-            translated_text = translate_with_openai(input_text, model_choice, target_language)
+    def validate_api_keys(self) -> List[str]:
+        """Validate and return Gemini API keys."""
+        config = self.config_manager.get_config()
+        api_keys = config.get('gemini', {}).get('api_keys', [])
+
+        if not api_keys or not all(api_keys):
+            raise ValueError("Gemini API keys not configured properly")
+
+        return api_keys
+
+    def translate(self, text: str, model_name: str, target_language: str) -> str:
+        """Translate text using specified Gemini model."""
+        api_keys = self.validate_api_keys()
+        selected_key = random.choice(api_keys)
+
+        genai.configure(api_key=selected_key)
+        model = genai.GenerativeModel(model_name)
+        prompt = f"Translate the following text to {target_language}: \n\n{text}"
+
+        response = model.generate_content(prompt)
+        return response.text
+
+
+class OpenAITranslator:
+    """Translation service using OpenAI GPT API."""
+
+    def __init__(self, config_manager: ConfigManager) -> None:
+        self.config_manager = config_manager
+
+    def validate_api_key(self) -> str:
+        """Validate and return OpenAI API key."""
+        config = self.config_manager.get_config()
+        api_key = config.get('openai', {}).get('api_key')
+
+        if not api_key:
+            raise ValueError("OpenAI API key not configured")
+
+        return api_key
+
+    def translate(self, text: str, model_name: str, target_language: str) -> str:
+        """Translate text using specified OpenAI model."""
+        api_key = self.validate_api_key()
+        client = OpenAI(api_key=api_key)
+
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": f"You are a translator. Translate the given text to {target_language}."},
+                {"role": "user", "content": text}
+            ]
+        )
+        content = response.choices[0].message.content
+        return content if content is not None else ""
+
+
+class TranslationService:
+    """Main translation service coordinating different providers."""
+
+    def __init__(self, config_manager: ConfigManager) -> None:
+        self.config_manager = config_manager
+        self.gemini_translator = GeminiTranslator(config_manager)
+        self.openai_translator = OpenAITranslator(config_manager)
+        self.logger = logging.getLogger(__name__)
+
+    def translate(self, text: str, model_name: str, target_language: str) -> str:
+        """Translate text using appropriate provider based on model name."""
+        if 'gemini' in model_name:
+            return self.gemini_translator.translate(text, model_name, target_language)
+        elif 'gpt' in model_name:
+            return self.openai_translator.translate(text, model_name, target_language)
         else:
-            return jsonify({"error": f"Unsupported model: {model_choice}"}), 400
-        
-        print("번역 완료.")
+            raise ValueError(f"Unsupported model: {model_name}")
 
-        # 번역 성공 시 프리셋에 모델 저장
+    def get_available_models(self, provider: str) -> List[str]:
+        """Get available models for specified provider, with presets first."""
+        config = self.config_manager.get_config()
+        available_models = []
+
+        # Add preset models for the provider
+        presets = config.get('presets', {}).get('models', [])
+        provider_filter = 'gemini' if provider == 'gemini' else 'gpt'
+        provider_presets = [
+            model for model in presets
+            if provider_filter in model
+        ]
+        available_models.extend(provider_presets)
+
+        # Fetch dynamic models
+        if provider == 'gemini':
+            available_models.extend(self._get_gemini_models())
+        elif provider == 'openai':
+            available_models.extend(self._get_openai_models())
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_models = []
+        for model in available_models:
+            if model not in seen:
+                seen.add(model)
+                unique_models.append(model)
+
+        return unique_models
+
+    def _get_gemini_models(self) -> List[str]:
+        """Fetch available Gemini models with fallback to saved models."""
         try:
-            if 'presets' not in config:
-                config['presets'] = {'models': [], 'targets': []}
-            if model_choice not in config['presets']['models']:
-                config['presets']['models'].insert(0, model_choice)  # 최상단에 추가
-                # 최대 5개로 제한
-                if len(config['presets']['models']) > 5:
-                    config['presets']['models'] = config['presets']['models'][:5]
-                # config.json 파일 업데이트
-                with open('config.json', 'w', encoding='utf-8') as f:
-                    json.dump(config, f, indent=2, ensure_ascii=False)
-                print(f"모델 '{model_choice}'을 프리셋에 저장했습니다.")
+            api_keys = self.gemini_translator.validate_api_keys()
+            genai.configure(api_key=random.choice(api_keys))
+
+            models = []
+            for model_info in genai.list_models():
+                if 'generateContent' in model_info.supported_generation_methods:
+                    models.append(model_info.name)
+
+            return models
+
         except Exception as e:
-            print(f"프리셋 저장 중 오류 발생 (무시): {e}")
+            self.logger.error(f"Failed to fetch Gemini models: {e}")
+            # Fallback to saved models
+            config = self.config_manager.get_config()
+            return config.get('gemini', {}).get('available_models', [])
 
-        return jsonify({'translated_text': translated_text})
+    def _get_openai_models(self) -> List[str]:
+        """Fetch available OpenAI models with fallback to saved models."""
+        try:
+            
+            api_key = self.openai_translator.validate_api_key()
 
-    except Exception as e:
-        error_message = str(e)
-        print(f"번역 중 오류 발생: {error_message}")
-        return jsonify({"error": error_message}), 500
+            if api_key == 'YOUR_OPENAI_API_KEY_HERE':
+                raise ValueError("OpenAI API key not configured")
+
+            import openai as openai_module
+            openai_module.api_key = api_key
+            account_info = openai_module.models.list()
+            return [model.id for model in account_info.data]
+
+        except Exception as e:
+            self.logger.error(f"Failed to fetch OpenAI models: {e}")
+            # Fallback to saved models
+            config = self.config_manager.get_config()
+            return config.get('openai', {}).get('available_models', [])
+
+    def save_preset_model(self, model_name: str) -> None:
+        """Save model to presets, maintaining max limit."""
+        config = self.config_manager.get_config()
+
+        if 'presets' not in config:
+            config['presets'] = {'models': [], 'targets': []}
+
+        presets = config['presets']['models']
+        if model_name not in presets:
+            presets.insert(0, model_name)  # Add to beginning
+            # Trim to max presets
+            if len(presets) > MAX_PRESETS:
+                presets[:] = presets[:MAX_PRESETS]
+
+            self.config_manager.save_config(config)
+            self.logger.info(f"Model '{model_name}' saved to presets.")
+
+
+def create_app(config_path: str = 'config.json') -> Flask:
+    """Application factory for Flask app."""
+    app = Flask(__name__)
+    CORS(app)
+
+    # Configure Flask settings
+    app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
+
+    # Initialize services
+    config_manager = ConfigManager(config_path)
+    translation_service = TranslationService(config_manager)
+
+    # Logger is available through Flask's app.logger
+
+    @app.route('/models', methods=['GET'])
+    def get_models() -> Any:
+        """Get available models for specified provider."""
+        provider = request.args.get('provider', DEFAULT_PROVIDER)
+
+        if provider not in ['gemini', 'openai']:
+            return jsonify({"error": "Invalid provider. Must be 'gemini' or 'openai'"}), 400
+
+        try:
+            models = translation_service.get_available_models(provider)
+            return jsonify(models)
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Error fetching models: {e}")
+            return jsonify({"error": "Failed to fetch models"}), 500
+
+    @app.route('/translate', methods=['POST'])
+    def translate_text() -> Any:
+        """Translate text using specified model and target language."""
+        data = request.get_json()
+
+        required_fields = ['text', 'model', 'target_language']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+
+        text = data['text']
+        model_choice = data['model']
+        target_language = data['target_language']
+
+        try:
+            logging.getLogger(__name__).info(f"Translating with {model_choice} to {target_language}")
+            translated_text = translation_service.translate(text, model_choice, target_language)
+
+            # Save successful model to presets
+            try:
+                translation_service.save_preset_model(model_choice)
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Failed to save preset (ignoring): {e}")
+
+            return jsonify({'translated_text': translated_text})
+
+        except ValueError as e:
+            error_msg = str(e)
+            logging.getLogger(__name__).warning(f"Validation error: {error_msg}")
+            return jsonify({"error": error_msg}), 400
+        except Exception as e:
+            error_msg = str(e)
+            logging.getLogger(__name__).error(f"Translation error: {error_msg}")
+            return jsonify({"error": error_msg}), 500
+
+    return app
+
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5000, debug=True)
+    # Setup logging first
+    setup_logging(debug=True)
+
+    # Load configuration first
+    try:
+        app = create_app()
+        logger = logging.getLogger(__name__)
+        logger.info("Starting translation server...")
+        logger.info(f"Server running on http://{DEFAULT_HOST}:{DEFAULT_PORT}")
+        app.run(host=DEFAULT_HOST, port=DEFAULT_PORT, debug=True)
+    except Exception as e:
+        logging.getLogger(__name__).critical(f"Fatal error: {e}")
+        exit(1)

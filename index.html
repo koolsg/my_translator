@@ -198,7 +198,7 @@
                 outputDiv.textContent = '번역할 내용을 입력해주세요.';
                 return;
             }
-            
+
             if (!selectedModel || selectedModel.includes('로딩') || selectedModel.includes('없음')) {
                 outputDiv.textContent = '먼저 사용 가능한 모델을 선택해주세요.';
                 return;
@@ -207,7 +207,18 @@
             // UI 비활성화
             translateButton.disabled = true;
             inputTextarea.disabled = true;
-            outputDiv.textContent = '번역 중... (시간이 다소 소요될 수 있습니다)'; // 로딩 표시
+
+            // 타이머 시작
+            let startTime = Date.now();
+            let timerInterval = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const minutes = Math.floor(elapsed / 60);
+                const seconds = elapsed % 60;
+                const timeString = minutes > 0 ? `${minutes}분 ${seconds}초` : `${seconds}초`;
+                outputDiv.textContent = `번역 중... (${timeString} 경과)`;
+            }, 1000);
+
+            outputDiv.textContent = '번역 중... (0초 경과)'; // 초기 로딩 표시
 
             // 로컬 백엔드 서버에 번역 요청 (긴 텍스트 지원을 위해 AbortController 사용)
             const controller = new AbortController();
@@ -234,12 +245,6 @@
                 }
                 return response.json();
             })
-            .then(response => {
-                if (!response.ok) {
-                    return response.json().then(err => { throw new Error(err.error || '서버에서 오류가 발생했습니다.') });
-                }
-                return response.json();
-            })
             .then(data => {
                 outputDiv.textContent = data.translated_text;
             })
@@ -248,6 +253,8 @@
                 outputDiv.textContent = `번역 중 오류가 발생했습니다: ${error.message}`;
             })
             .finally(() => {
+                // 타이머 정리
+                clearInterval(timerInterval);
                 // UI 다시 활성화
                 translateButton.disabled = false;
                 inputTextarea.disabled = false;
