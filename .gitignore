@@ -120,3 +120,4 @@ keys.json
 # Project specific
 config.json
 *.md
+app.pid

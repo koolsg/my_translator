@@ -1,78 +1,103 @@
-# Stop the translation server process
-# This script safely stops the running Flask application server by:
+# Stop the translation server process and its child processes
+# This script safely stops the Flask application and any child processes by:
 # 1. Reading and validating the PID from app.pid file
-# 2. Checking if the process is actually running
-# 3. Stopping the process and cleaning up the PID file
+# 2. Finding and stopping all child processes recursively
+# 3. Stopping the main process
+# 4. Cleaning up the PID file
 
-# Get script directory and construct PID file path
+# Get script directory and PID file path
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $pidPath = Join-Path $scriptDir "app.pid"
 
-# Helper function: Validates PID file and returns process ID if valid
+# Helper function: Validates PID file and returns process ID
 # Returns $null if file doesn't exist, is empty, or contains invalid PID
 function Test-PidFile {
     param([string]$Path)
-
-    # Check if PID file exists
     if (-not (Test-Path $Path)) { return $null }
-
     try {
-        # Read file content and trim whitespace
         $content = Get-Content $Path -ErrorAction Stop
         $processId = $content.Trim()
-
-        # Validate that content is not empty and is a valid integer
         if ([string]::IsNullOrEmpty($processId) -or -not [int]::TryParse($processId, [ref]$null)) {
             return $null
         }
-
         return [int]$processId
-
-    } catch {
-        # Return null on any error (file access issues, etc.)
-        return $null
     }
+    catch { return $null }
 }
 
-# Helper function: Stops the server process and cleans up PID file
-# Exits with error code 1 if stopping fails
-function Stop-ServerProcess {
-    param([int]$ProcessId, [string]$PidFilePath)
+# Helper function: Gets all child processes recursively
+function Get-ChildProcesses {
+    param([int]$ParentId)
+    $childProcesses = @()
 
     try {
-        # Forcefully stop the process
-        Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+        $children = Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $ParentId }
+        foreach ($child in $children) {
+            # Add child processes recursively first
+            $childProcesses += Get-ChildProcesses -ParentId $child.ProcessId
+            # Add current child
+            $childProcesses += $child
+        }
+    }
+    catch {
+        Write-Warning "Failed to query child processes for PID $ParentId`: $($_.Exception.Message)"
+    }
 
-        # Clean up PID file after successful stop
-        Remove-Item $PidFilePath -Force -ErrorAction SilentlyContinue
+    return $childProcesses
+}
 
-        Write-Host "Server stopped successfully."
-
-    } catch {
-        # Exit with error if process cannot be stopped
-        Write-Error "Failed to stop process with PID $ProcessId`: $($_.Exception.Message)"
-        exit 1
+# Helper function: Stops a list of processes
+function Stop-Processes {
+    param([array]$Processes, [string]$Type)
+    foreach ($proc in $Processes) {
+        try {
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+            Write-Host "Stopped $Type process: $($proc.ProcessId) $($proc.Name)"
+        }
+        catch {
+            Write-Warning "Failed to stop $Type process $($proc.ProcessId) $($proc.Name)`: $($_.Exception.Message)"
+        }
     }
 }
 
 # Main execution logic
-# Step 1: Try to get valid process ID from PID file
+# Step 1: Get valid process ID from PID file
 $processId = Test-PidFile -Path $pidPath
 
-# Step 2: Exit gracefully if no valid PID file found
 if ($null -eq $processId) {
     Write-Host "No valid PID file found. Server may not be running."
     exit 0
 }
 
-# Step 3: Check if process with that ID is actually running
-if (-not (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
+# Step 2: Check if main process is running
+$mainProcess = Get-Process -Id $processId -ErrorAction SilentlyContinue
+if (-not $mainProcess) {
     Write-Warning "Process with PID $processId not found. It may have already stopped."
-    # Clean up stale PID file
     Remove-Item $pidPath -Force -ErrorAction SilentlyContinue
     exit 0
 }
 
-# Step 4: Stop the running server process
-Write-Host "Stopping server process (PID: $processId)..."
-Stop-ServerProcess -ProcessId $processId -PidFilePath $pidPath
+Write-Host "Stopping server and child processes for PID: $processId..."
+
+# Step 3: Get all child processes
+$childProcesses = Get-ChildProcesses -ParentId $processId
+Write-Host "Found $($childProcesses.Count) child processes to stop."
+
+# Step 4: Stop child processes first (in reverse order for proper cleanup)
+if ($childProcesses.Count -gt 0) {
+    Stop-Processes -Processes $childProcesses -Type "child"
+}
+
+# Step 5: Stop main process
+try {
+    Stop-Process -Id $processId -Force -ErrorAction Stop
+    Write-Host "Stopped main process: $processId $($mainProcess.Name)"
+}
+catch {
+    Write-Error "Failed to stop main process $processId`: $($_.Exception.Message)"
+    exit 1
+}
+
+# Step 6: Clean up PID file
+Remove-Item $pidPath -Force -ErrorAction SilentlyContinue
+Write-Host "Server and all child processes stopped successfully."

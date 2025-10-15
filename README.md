@@ -31,13 +31,15 @@ my_translator/
 
 Follow these steps to get the translator running on your local machine.
 
-### 1. Configure API Keys
+### Option A: Manual Setup
+
+#### 1. Configure API Keys
 
 First, you need to provide your API keys.
 
 1. **Copy the example configuration**:
    ```bash
-   cp config.json.example config.
+   cp config.json.example config.json
    ```
 
 2. **Edit `config.json`** with your actual API keys:
@@ -57,7 +59,7 @@ First, you need to provide your API keys.
    > **Note**: You only need to provide the key for the model(s) you intend to use.
    > **Security**: Never commit `config.json` to Git - it's in `.gitignore` for security.
 
-### 2. Install Dependencies
+#### 2. Install Dependencies
 
 You need Python 3 installed. Open your terminal and navigate to the project directory, then install the required Python libraries.
 
@@ -65,11 +67,20 @@ You need Python 3 installed. Open your terminal and navigate to the project dire
 # Navigate to the project folder
 cd path/to/my_translator
 
+# Create virtual environment (recommended)
+python -m venv .venv
+
+# Activate virtual environment
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+# source .venv/bin/activate
+
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-### 3. Run the Backend Server
+#### 3. Run the Backend Server
 
 Once the dependencies are installed, start the Flask backend server.
 
@@ -79,9 +90,80 @@ python app.py
 
 You should see a message indicating that the server is running on `http://127.0.0.1:5000`. Keep this terminal window open.
 
-### 4. Open the Translator
+#### 4. Open the Translator
 
 Open the `index.html` file in your favorite web browser (e.g., by double-clicking the file).
+
+### Option B: Automated Setup with PowerShell Scripts
+
+For a more convenient setup and management, use the provided PowerShell scripts. These scripts handle virtual environment setup, process management, and background execution automatically.
+
+#### 📊 Scripts Overview
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `start_server.ps1` | Starts the Flask server in background mode | `./start_server.ps1` |
+| `stop_server.ps1` | Stops the background server and cleans up processes | `./stop_server.ps1` |
+
+#### ⚙️ Prerequisites for PowerShell Scripts
+
+- **PowerShell Version**: Compatible with PowerShell 5.1+ (included in Windows 7 and newer)
+- **Windows OS**: Required for full functionality (uses Windows-specific APIs)
+- **Execution Policy**: May need to be adjusted for script execution
+
+#### 🚀 Using PowerShell Scripts
+
+1. **Initial Setup**:
+    ```powershell
+    # Navigate to project directory
+    cd path/to/my_translator
+
+    # Start the server (auto-setup mode)
+    # Note: First run may take longer as it sets up virtual environment
+    .\start_server.ps1
+    ```
+
+2. **Check Server Status**:
+    ```powershell
+    # If PID file exists, server is running
+    Get-Content app.pid  # Shows current process ID
+    ```
+
+3. **Stop the Server**:
+    ```powershell
+    # Gracefully stops server and all child processes
+    .\stop_server.ps1
+    ```
+
+#### 🔧 PowerShell Script Features
+
+**start_server.ps1 Features**:
+- Automatic virtual environment detection and setup
+- Background execution (no console window)
+- Process ID tracking via `app.pid` file
+- Comprehensive error handling
+- Silent operation suitable for scheduled tasks
+
+**stop_server.ps1 Features**:
+- Safe shutdown of main process and all child processes
+- Recursive child process termination
+- PID file validation and cleanup
+- Process existence verification
+- Clean termination even if processes are unresponsive
+
+#### 🛡️ Error Handling
+
+The scripts include robust error handling for common scenarios:
+- Missing virtual environment
+- Invalid PID files
+- Process not found
+- Permission issues
+- Child process cleanup failures
+
+#### 📁 Files Generated
+
+- `app.pid`: Contains the main process ID for server management
+- `.venv/`: Virtual environment (created automatically in auto-setup mode)
 
 ## 💡 How to Use
 

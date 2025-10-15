@@ -1,10 +1,16 @@
-# 현재 스크립트의 디렉터리 기준으로 가상환경 python 찾기
-$base = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$venvPython = Join-Path $base ".venv\Scripts\python.exe"
-$appPath = Join-Path $base "app.py"
-$pidPath = Join-Path $base "app.pid"
+# Start the translation server in background mode
+# This script launches the Flask application using pythonw.exe for windowless execution
+# and saves the process ID for later management
 
-# 에러 처리를 위한 try-catch 블록 시작
+# Get script directory and set up environment
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+Set-Location -Path $scriptDir  # Fix current directory to avoid shell startup influences
+
+# Construct file paths
+$venvPython = Join-Path $scriptDir ".venv\Scripts\pythonw.exe"  # Use standard venv path for consistency
+$appPath = Join-Path $scriptDir "app.py"
+$pidPath = Join-Path $scriptDir "app.pid"
+
 try {
     # Check if virtual environment Python executable exists
     if (-not (Test-Path $venvPython)) {
@@ -21,34 +27,40 @@ try {
         try {
             Remove-Item $pidPath -Force
             Write-Host "Previous PID file cleaned up."
-        } catch {
+        }
+        catch {
             Write-Warning "Failed to remove previous PID file: $($_.Exception.Message)"
         }
     }
 
-    Write-Host "Starting server..."
+    Write-Host "Starting server in background mode..."
 
-    # Start process and verify success
-    $proc = Start-Process -FilePath $venvPython -ArgumentList $appPath -WindowStyle Hidden -PassThru -ErrorAction Stop
+    # Configure ProcessStartInfo for silent background execution
+    # pythonw.exe runs without console window, ProcessStartInfo prevents PowerShell window flash
+    $processStartInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $processStartInfo.FileName = $venvPython
+    $processStartInfo.Arguments = "`"$appPath`""
+    $processStartInfo.WorkingDirectory = $scriptDir
+    $processStartInfo.CreateNoWindow = $true
+    $processStartInfo.UseShellExecute = $false
+
+    # Start the process
+    $process = [System.Diagnostics.Process]::Start($processStartInfo)
 
     # Verify process started successfully
-    if (-not $proc -or $proc.HasExited) {
+    if (-not $process -or $process.HasExited) {
         throw "Failed to start the process."
     }
 
     # Save process ID to PID file
-    try {
-        $proc.Id | Out-File -FilePath $pidPath -Encoding ascii -ErrorAction Stop
-        Write-Host "Server started successfully. (PID: $($proc.Id))"
-        Write-Host "PID file: $pidPath"
-    } catch {
-        # Terminate process if PID file write fails
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        throw "Failed to save PID file: $($_.Exception.Message)"
-    }
+    $process.Id | Out-File -FilePath $pidPath -Encoding ascii -ErrorAction Stop
 
-} catch {
-    # Handle all errors here
+    Write-Host "Server started successfully. (PID: $($process.Id))"
+    Write-Host "PID file: $pidPath"
+    Write-Host "Server is running in background. Use stop_server-2.ps1 to stop it."
+
+}
+catch {
     Write-Error "Server startup failed: $($_.Exception.Message)"
     exit 1
 }
