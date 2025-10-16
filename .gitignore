@@ -121,3 +121,4 @@ keys.json
 config.json
 *.md
 app.pid
+!README.md

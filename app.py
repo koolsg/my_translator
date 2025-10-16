@@ -306,6 +306,7 @@ def create_app(config_path: str = 'config.json') -> Flask:
         text = data['text']
         model_choice = data['model']
         target_language = data['target_language']
+        show_notification = data.get('show_notification', False)
 
         try:
             logging.getLogger(__name__).info(f"Translating with {model_choice} to {target_language}")
@@ -316,6 +317,20 @@ def create_app(config_path: str = 'config.json') -> Flask:
                 translation_service.save_preset_model(model_choice)
             except Exception as e:
                 logging.getLogger(__name__).warning(f"Failed to save preset (ignoring): {e}")
+
+            # Notify user on Windows if requested
+            if sys.platform == 'win32' and show_notification:
+                try:
+                    from win10toast import ToastNotifier
+                    toaster = ToastNotifier()
+                    toaster.show_toast(
+                        "번역 완료",
+                        "번역이 성공적으로 완료되었습니다.",
+                        duration=5,
+                        threaded=True
+                    )
+                except Exception as e:
+                    logging.getLogger(__name__).warning(f"Failed to send notification (ignoring): {e}")
 
             return jsonify({'translated_text': translated_text})
 

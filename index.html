@@ -117,6 +117,10 @@
             <option value="zh">중국어</option>
         </select>
         <button id="translate-button">번역하기</button>
+        <div style="display: flex; align-items: center; gap: 5px; margin-left: 15px;">
+            <input type="checkbox" id="notification-checkbox" checked>
+            <label for="notification-checkbox" style="font-size: 14px; color: #333; cursor: pointer;">Windows 알림</label>
+        </div>
     </div>
 
     <div class="translator-container">
@@ -138,7 +142,7 @@
         }
 
         // 선택된 provider에 맞는 모델 목록을 가져오는 함수
-        async function loadModelsForProvider(provider) {
+        async function loadModelsForProvider(provider, selectedModelName = null) {
             const modelSelect = document.getElementById('model-select');
             modelSelect.innerHTML = '<option>모델 로딩 중...</option>';
 
@@ -163,6 +167,12 @@
                     option.textContent = displayName;
                     modelSelect.appendChild(option);
                 });
+
+                // 불러온 후, 이전에 선택했던 모델이 있으면 선택
+                if (selectedModelName) {
+                    modelSelect.value = selectedModelName;
+                }
+
             } catch (error) {
                 console.error('Error fetching models:', error);
                 modelSelect.innerHTML = '<option>모델 로딩 실패</option>';
@@ -175,21 +185,31 @@
             updateCharCounter();
             document.getElementById('input-text').addEventListener('input', updateCharCounter);
 
+            const providerSelect = document.getElementById('provider-select');
+            const lastUsedProvider = localStorage.getItem('lastUsedProvider') || 'gemini';
+            const lastUsedModel = localStorage.getItem('lastUsedModel');
+
+            // 마지막으로 사용한 provider를 선택
+            providerSelect.value = lastUsedProvider;
+
             // API Provider 변경 시 모델 목록 업데이트
-            document.getElementById('provider-select').addEventListener('change', (e) => {
+            providerSelect.addEventListener('change', (e) => {
                 loadModelsForProvider(e.target.value);
             });
 
-            // 초기 모델 목록 로드 (기본값: Gemini)
-            loadModelsForProvider('gemini');
+            // 초기 모델 목록 로드 (마지막으로 사용한 provider와 model 기준)
+            loadModelsForProvider(lastUsedProvider, lastUsedModel);
         });
 
         // 번역 버튼 클릭 이벤트 리스너
         document.getElementById('translate-button').addEventListener('click', () => {
             const inputText = document.getElementById('input-text').value;
             const outputDiv = document.getElementById('output-text');
+            const providerSelect = document.getElementById('provider-select');
+            const selectedProvider = providerSelect.value;
             const selectedModel = document.getElementById('model-select').value;
-            const targetLanguage = document.getElementById('target-language-select').value; // 대상 언어 가져오기
+            const targetLanguage = document.getElementById('target-language-select').value;
+            const showNotification = document.getElementById('notification-checkbox').checked;
 
             const translateButton = document.getElementById('translate-button');
             const inputTextarea = document.getElementById('input-text');
@@ -218,11 +238,10 @@
                 outputDiv.textContent = `번역 중... (${timeString} 경과)`;
             }, 1000);
 
-            outputDiv.textContent = '번역 중... (0초 경과)'; // 초기 로딩 표시
+            outputDiv.textContent = '번역 중... (0초 경과)';
 
-            // 로컬 백엔드 서버에 번역 요청 (긴 텍스트 지원을 위해 AbortController 사용)
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 300000); // 5분 timeout
+            const timeoutId = setTimeout(() => controller.abort(), 300000);
 
             fetch('http://localhost:5000/translate', {
                 method: 'POST',
@@ -231,8 +250,9 @@
                 },
                 body: JSON.stringify({
                     text: inputText,
-                    model: selectedModel, // 선택된 정확한 모델 이름을 전송
-                    target_language: targetLanguage // 선택된 대상 언어 전송
+                    model: selectedModel,
+                    target_language: targetLanguage,
+                    show_notification: showNotification
                 }),
                 signal: controller.signal
             })
@@ -247,15 +267,16 @@
             })
             .then(data => {
                 outputDiv.textContent = data.translated_text;
+                // 번역 성공 시 마지막으로 사용한 provider와 model 저장
+                localStorage.setItem('lastUsedProvider', selectedProvider);
+                localStorage.setItem('lastUsedModel', selectedModel);
             })
             .catch(error => {
                 console.error('Error:', error);
                 outputDiv.textContent = `번역 중 오류가 발생했습니다: ${error.message}`;
             })
             .finally(() => {
-                // 타이머 정리
                 clearInterval(timerInterval);
-                // UI 다시 활성화
                 translateButton.disabled = false;
                 inputTextarea.disabled = false;
             });

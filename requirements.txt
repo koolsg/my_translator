@@ -2,3 +2,4 @@ Flask
 google-generativeai
 Flask-Cors
 openai
+win10toast
